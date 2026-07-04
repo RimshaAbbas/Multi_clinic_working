@@ -7,6 +7,7 @@ import {
 import { fetchAvailableSlots, createAppointment } from '../utils/api'
 import { BRANCHES, SPECIALIZATIONS, DOCTORS, TIME_SLOTS } from '../data/clinicData'
 import { sendBookingConfirmed } from '../utils/notifications'
+import { todayLocal, displayDate, displayTime } from '../utils/dateTime'
 
 // ─── Step indicator ───────────────────────────────────────────────────────────
 const STEPS = [
@@ -108,8 +109,8 @@ function ConfirmationScreen({ booking, whatsappSent }) {
           ['Branch',    booking.branchName],
           ['Doctor',    booking.doctorName],
           ['Specialty', booking.specialty],
-          ['Date',      booking.date],
-          ['Time',      booking.time],
+          ['Date',      displayDate(booking.date)],
+          ['Time',      displayTime(booking.time)],
           ['Phone',     booking.phone],
         ].map(([k, v]) => v ? (
           <div key={k} className="flex justify-between">
@@ -270,8 +271,8 @@ export default function BookPage() {
     }
   }
 
-  // ── Today's date string ───────────────────────────────────────────────────
-  const today = new Date().toISOString().split('T')[0]
+  // ── Today's date string (Asia/Karachi) ───────────────────────────────────
+  const today = todayLocal()
 
   // ── If confirmed ──────────────────────────────────────────────────────────
   if (confirmed) return (
@@ -411,7 +412,7 @@ export default function BookPage() {
                 )}
                 {!selectedDate && (
                   <p className="text-xs text-slate-400 mt-1">
-                    You can book from today ({today}) onwards.
+                    You can book from today ({displayDate(today)}) onwards.
                   </p>
                 )}
               </div>
@@ -477,9 +478,9 @@ export default function BookPage() {
                   <span className="text-slate-400">Doctor:</span>
                   <span className="font-medium">{DOCTORS.find(d => d.id === selectedDoctor)?.name}</span>
                   <span className="text-slate-400">Date:</span>
-                  <span className="font-medium">{selectedDate}</span>
+                  <span className="font-medium">{displayDate(selectedDate)}</span>
                   <span className="text-slate-400">Time:</span>
-                  <span className="font-medium">{selectedTime}</span>
+                  <span className="font-medium">{displayTime(selectedTime)}</span>
                 </div>
               </div>
 

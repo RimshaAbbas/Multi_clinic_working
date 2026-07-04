@@ -22,6 +22,8 @@ import {
   FlaskConical, ArrowRight, Search,
 } from 'lucide-react'
 import supabase from '../lib/supabaseClient'
+import { todayLocal, displayDate, displayTime } from '../utils/dateTime'
+import { sendBookingConfirmed } from '../utils/notifications'
 
 // ── All available time slots ──────────────────────────────────────────────────
 const TIME_SLOTS = [
@@ -52,7 +54,7 @@ function StepTitle({ number, title, subtitle }) {
 }
 
 // ── Confirmation screen ───────────────────────────────────────────────────────
-function ConfirmationScreen({ booking, doctorName, onReset }) {
+function ConfirmationScreen({ booking, doctorName, smsSent, onReset }) {
   return (
     <div className="text-center py-8 animate-fade-in">
       <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-5 shadow">
@@ -60,14 +62,25 @@ function ConfirmationScreen({ booking, doctorName, onReset }) {
       </div>
       <h2 className="text-2xl font-bold text-[#1E3A8A] mb-1">Appointment Booked!</h2>
       <p className="text-slate-500 text-sm mb-1">Reference: <span className="font-mono font-bold text-[#1E3A8A]">#{booking.id.slice(0,8).toUpperCase()}</span></p>
-      <p className="text-xs text-slate-400 mb-7">Our staff will confirm your slot shortly. Please arrive 10 minutes early.</p>
+      <p className="text-xs text-slate-400 mb-4">Our staff will confirm your slot shortly. Please arrive 10 minutes early.</p>
+
+      {/* SMS / WhatsApp notification status */}
+      {smsSent !== null && (
+        <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold mb-5 ${
+          smsSent
+            ? 'bg-green-100 text-green-700 border border-green-200'
+            : 'bg-amber-50 text-amber-700 border border-amber-200'
+        }`}>
+          {smsSent ? '✅ Confirmation sent to your WhatsApp/SMS' : '⚠️ Could not send notification (check phone number)'}
+        </div>
+      )}
 
       <div className="max-w-sm mx-auto bg-slate-50 border border-slate-100 rounded-2xl p-6 text-left space-y-3 text-sm mb-7">
         {[
           ['Patient',  booking.patient_name],
           ['Doctor',   doctorName],
-          ['Date',     booking.appointment_date],
-          ['Time',     booking.appointment_time],
+          ['Date',     displayDate(booking.appointment_date)],
+          ['Time',     displayTime(booking.appointment_time)],
           ['Status',   'Pending confirmation'],
         ].map(([k, v]) => (
           <div key={k} className="flex justify-between gap-4">
@@ -104,12 +117,16 @@ export default function PatientPortal() {
   const [specFilter,  setSpecFilter]  = useState('all')
   const [searchTerm,  setSearchTerm]  = useState('')
 
-  // Pre-compute today and tomorrow strings once (YYYY-MM-DD)
-  const today = new Date().toISOString().split('T')[0]
+  // ── Today / tomorrow in Asia/Karachi (never UTC) ─────────────────────────
+  const today = todayLocal()
   const tomorrow = (() => {
-    const d = new Date()
-    d.setDate(d.getDate() + 1)
-    return d.toISOString().split('T')[0]
+    // Build tomorrow by parsing today's PKT date string, not new Date()
+    const [y, m, d] = today.split('-').map(Number)
+    const dt = new Date(y, m - 1, d + 1)   // local arithmetic, no UTC shift
+    const yy = dt.getFullYear()
+    const mm = String(dt.getMonth() + 1).padStart(2, '0')
+    const dd = String(dt.getDate()).padStart(2, '0')
+    return `${yy}-${mm}-${dd}`
   })()
 
   const [selectedDoctor, setSelectedDoctor] = useState(null)
@@ -125,6 +142,11 @@ export default function PatientPortal() {
   const [submitting,  setSubmitting]  = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [confirmed,   setConfirmed]   = useState(null)
+  const [smsSent,     setSmsSent]     = useState(null)
+
+  // ── Booked slots for selected doctor + date ───────────────────────────────
+  const [bookedSlots,   setBookedSlots]   = useState([])   // array of time strings
+  const [slotsLoading,  setSlotsLoading]  = useState(false)
 
   // ── Fetch active doctors ──────────────────────────────────────────────────
   useEffect(() => {
@@ -140,6 +162,33 @@ export default function PatientPortal() {
     }
     load()
   }, [])
+
+  // ── Fetch booked slots for selected doctor + date ─────────────────────────
+  // Queries confirmed OR pending appointments (both block a slot).
+  // Cancelled appointments free the slot back up.
+  useEffect(() => {
+    if (!selectedDoctor || !form.appointment_date) {
+      setBookedSlots([])
+      return
+    }
+
+    let active = true
+    setSlotsLoading(true)
+
+    supabase
+      .from('appointments')
+      .select('appointment_time')
+      .eq('doctor_id', selectedDoctor.id)
+      .eq('appointment_date', form.appointment_date)
+      .in('status', ['pending', 'confirmed', 'completed'])   // cancelled = available
+      .then(({ data }) => {
+        if (!active) return
+        setBookedSlots((data || []).map(r => r.appointment_time))
+        setSlotsLoading(false)
+      })
+
+    return () => { active = false }
+  }, [selectedDoctor, form.appointment_date])
 
   // Unique specialties for filter pills
   const specialties = ['all', ...new Set(doctors.map(d => d.specialty))]
@@ -165,9 +214,26 @@ export default function PatientPortal() {
     if (!form.appointment_date) {
       e.appointment_date = 'Date is required.'
     } else if (form.appointment_date < today) {
-      e.appointment_date = 'You cannot book an appointment in the past. Please select today or a future date.'
+      e.appointment_date = 'Past dates are not allowed. Please select today or a future date.'
     }
-    if (!form.appointment_time)                e.appointment_time = 'Time slot is required.'
+    if (!form.appointment_time) {
+      e.appointment_time = 'Time slot is required.'
+    } else if (form.appointment_date === today) {
+      // Block time slots that have already passed today (PKT)
+      const now = new Date()
+      const pkNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }))
+      const [timePart, meridiem] = form.appointment_time.split(' ')
+      const [hStr, mStr] = timePart.split(':')
+      let hours = parseInt(hStr, 10)
+      const mins  = parseInt(mStr, 10)
+      if (meridiem === 'PM' && hours !== 12) hours += 12
+      if (meridiem === 'AM' && hours === 12) hours = 0
+      const slotMinutes = hours * 60 + mins
+      const nowMinutes  = pkNow.getHours() * 60 + pkNow.getMinutes()
+      if (slotMinutes <= nowMinutes) {
+        e.appointment_time = 'This time slot has already passed. Please choose a future time.'
+      }
+    }
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -195,12 +261,8 @@ export default function PatientPortal() {
       .single()
 
     if (error) {
-      // Translate technical Supabase errors into human-friendly messages
       if (error.message?.includes('row-level security') || error.code === '42501') {
-        setSubmitError(
-          'Booking system is not fully configured yet. ' +
-          'Please ask the clinic staff to run the database setup.'
-        )
+        setSubmitError('Booking system is not fully configured. Please ask clinic staff to run the database setup.')
       } else if (error.message?.includes('violates check constraint')) {
         setSubmitError('Please check your details and try again.')
       } else if (error.message?.includes('not-null') || error.message?.includes('null value')) {
@@ -214,16 +276,35 @@ export default function PatientPortal() {
 
     setConfirmed(data)
     setSubmitting(false)
+
+    // ── Send WhatsApp / SMS confirmation to patient ───────────────────────
+    try {
+      const result = await sendBookingConfirmed(
+        {
+          ...data,
+          // Make sure appointment_date and appointment_time fields are present
+          appointment_date: form.appointment_date,
+          appointment_time: form.appointment_time,
+          patient_name:     form.patient_name.trim(),
+          patient_phone:    form.patient_phone.trim(),
+        },
+        selectedDoctor?.name || 'your doctor'
+      )
+      setSmsSent(result.success)
+    } catch {
+      setSmsSent(false)
+    }
   }
 
   function handleReset() {
     setConfirmed(null)
+    setSmsSent(null)
     setSelectedDoctor(null)
     setForm({
       patient_name:     '',
       patient_phone:    '',
       patient_email:    '',
-      appointment_date: tomorrow,   // reset to tomorrow, not empty
+      appointment_date: tomorrow,
       appointment_time: '',
       reason:           '',
     })
@@ -275,6 +356,7 @@ export default function PatientPortal() {
             <ConfirmationScreen
               booking={confirmed}
               doctorName={selectedDoctor?.name || ''}
+              smsSent={smsSent}
               onReset={handleReset}
             />
           ) : (
@@ -376,8 +458,8 @@ export default function PatientPortal() {
                             setForm(f => ({...f, appointment_date: today}))
                             return
                           }
-                          setForm(f => ({...f, appointment_date: picked}))
-                          setErrors(er => ({...er, appointment_date: ''}))
+                          setForm(f => ({...f, appointment_date: picked, appointment_time: ''}))
+                          setErrors(er => ({...er, appointment_date: '', appointment_time: ''}))
                         }}
                         className={`input-field ${errors.appointment_date ? 'border-red-400' : ''}`}
                       />
@@ -386,16 +468,98 @@ export default function PatientPortal() {
                       )}
                     </div>
                     <div>
-                      <label className="label">Time Slot</label>
-                      <select
-                        value={form.appointment_time}
-                        onChange={e => { setForm(f => ({...f, appointment_time: e.target.value})); setErrors(er => ({...er, appointment_time: ''})) }}
-                        className={`input-field ${errors.appointment_time ? 'border-red-400' : ''}`}
-                      >
-                        <option value="">— Select a time —</option>
-                        {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
-                      {errors.appointment_time && <p className="error-msg"><AlertCircle size={11} />{errors.appointment_time}</p>}
+                      <label className="label">
+                        Time Slot
+                        {slotsLoading && (
+                          <span className="ml-2 text-[10px] text-slate-400 font-normal flex items-center gap-1 inline-flex">
+                            <Loader2 size={10} className="animate-spin" /> Checking availability…
+                          </span>
+                        )}
+                      </label>
+
+                      {/* Visual slot grid */}
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-1">
+                        {TIME_SLOTS.map(t => {
+                          const isBooked = bookedSlots.includes(t)
+                          const isSelected = form.appointment_time === t
+
+                          // Past-time check for today
+                          let isPast = false
+                          if (form.appointment_date === today) {
+                            const now   = new Date()
+                            const pkNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }))
+                            const [timePart, meridiem] = t.split(' ')
+                            const [hStr, mStr] = timePart.split(':')
+                            let h = parseInt(hStr, 10)
+                            const m = parseInt(mStr, 10)
+                            if (meridiem === 'PM' && h !== 12) h += 12
+                            if (meridiem === 'AM' && h === 12) h = 0
+                            isPast = (h * 60 + m) <= (pkNow.getHours() * 60 + pkNow.getMinutes())
+                          }
+
+                          const isDisabled = isBooked || isPast
+
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              disabled={isDisabled}
+                              onClick={() => {
+                                if (isDisabled) return
+                                setForm(f => ({ ...f, appointment_time: t }))
+                                setErrors(er => ({ ...er, appointment_time: '' }))
+                              }}
+                              title={
+                                isBooked ? 'This slot is already booked'
+                                : isPast  ? 'This time has already passed'
+                                : t
+                              }
+                              className={`
+                                relative py-2.5 px-1 rounded-xl text-xs font-semibold border-2 transition-all duration-150 text-center
+                                ${isBooked
+                                  ? 'bg-red-50 border-red-200 text-red-400 cursor-not-allowed line-through'
+                                  : isPast
+                                    ? 'bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed line-through'
+                                    : isSelected
+                                      ? 'bg-[#1E3A8A] border-[#1E3A8A] text-white shadow-md shadow-blue-200 scale-105'
+                                      : 'bg-white border-slate-200 text-slate-700 hover:border-[#3B82F6] hover:text-[#3B82F6] hover:bg-blue-50'
+                                }
+                              `}
+                            >
+                              {t}
+                              {isBooked && (
+                                <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white rounded-full text-[9px] flex items-center justify-center font-bold leading-none">
+                                  ✕
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+
+                      {/* Legend */}
+                      <div className="flex flex-wrap items-center gap-3 mt-3 text-[11px] text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <span className="w-3 h-3 rounded border-2 border-[#1E3A8A] bg-[#1E3A8A] inline-block" />
+                          Selected
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-3 h-3 rounded border-2 border-slate-200 bg-white inline-block" />
+                          Available
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-3 h-3 rounded border-2 border-red-200 bg-red-50 inline-block" />
+                          Booked
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-3 h-3 rounded border-2 border-slate-100 bg-slate-50 inline-block" />
+                          Passed
+                        </span>
+                      </div>
+
+                      {errors.appointment_time && (
+                        <p className="error-msg mt-1"><AlertCircle size={11} />{errors.appointment_time}</p>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -9,7 +9,8 @@
 
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useEffect } from 'react'
-import { AuthProvider, useAuth } from './context/AuthContext'
+import { AuthProvider, useAuth }         from './context/AuthContext'
+import { SettingsProvider }              from './context/SettingsContext'
 import ParticleBackground from './components/three/ParticleBackground'
 
 // Public pages
@@ -83,11 +84,13 @@ function AppInner() {
   )
 }
 
-// ── Root export — AuthProvider must wrap the Router children ─────────────────
+// ── Root export — AuthProvider + SettingsProvider wrap the Router children ────
 export default function App() {
   return (
     <AuthProvider>
-      <AppInner />
+      <SettingsProvider>
+        <AppInner />
+      </SettingsProvider>
     </AuthProvider>
   )
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import { Menu, X, Phone, Calendar } from 'lucide-react'
+import { useSettings } from '../../context/SettingsContext'
 
 const NAV_LINKS = [
   { to: '/',        label: 'Home' },
@@ -10,14 +11,19 @@ const NAV_LINKS = [
 ]
 
 export default function Navbar() {
-  const [menuOpen,   setMenuOpen]   = useState(false)
-  const [scrolled,   setScrolled]   = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
   const location = useLocation()
+
+  // Pull live branding from SettingsContext
+  const { settings } = useSettings()
+  const primary = settings.primary_color || '#1E3A8A'
+  const accent  = settings.accent_color  || '#3B82F6'
 
   // Close mobile menu on route change
   useEffect(() => { setMenuOpen(false) }, [location.pathname])
 
-  // Add glass effect after scrolling
+  // Glass effect on scroll
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 20)
     window.addEventListener('scroll', handler, { passive: true })
@@ -32,13 +38,13 @@ export default function Navbar() {
           : 'bg-white/70 backdrop-blur-sm border-b border-transparent'
       }`}
     >
-      {/* Top bar */}
-      <div className="bg-[#1E3A8A] text-white text-xs py-1.5 px-4">
+      {/* Top info bar — dynamic primary color */}
+      <div className="text-white text-xs py-1.5 px-4" style={{ backgroundColor: primary }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <span className="hidden sm:flex items-center gap-1.5">
-            <Phone size={11} /> Emergency: +92 21 111 000 911
+            <Phone size={11} /> {settings.support_phone || '+92-21-111-222-333'}
           </span>
-          <span className="text-blue-200">Mon–Sat: 9:00 AM – 8:00 PM | 3 Clinic Branches</span>
+          <span style={{ color: `${accent}cc` }}>Mon–Sat: 9:00 AM – 8:00 PM | 3 Clinic Branches</span>
         </div>
       </div>
 
@@ -46,17 +52,32 @@ export default function Navbar() {
       <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
 
-          {/* Logo */}
+          {/* Logo — dynamic name + optional image */}
           <Link to="/" className="flex items-center gap-2.5 group">
-            <div className="w-9 h-9 bg-gradient-to-br from-[#1E3A8A] to-[#3B82F6] rounded-xl flex items-center justify-center shadow-md group-hover:scale-105 transition-transform">
-              <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" fill="white"/>
-                <path d="M11 7h2v2h-2V7zm0 4h2v6h-2v-6z" fill="white" fillOpacity="0.5"/>
-              </svg>
-            </div>
+            {settings.logo_url ? (
+              <img
+                src={settings.logo_url}
+                alt={settings.hospital_name}
+                className="w-9 h-9 rounded-xl object-contain group-hover:scale-105 transition-transform"
+                onError={e => { e.target.style.display = 'none' }}
+              />
+            ) : (
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center shadow-md group-hover:scale-105 transition-transform"
+                style={{ background: `linear-gradient(135deg, ${primary}, ${accent})` }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" fill="white"/>
+                </svg>
+              </div>
+            )}
             <div>
-              <span className="text-xl font-bold text-[#1E3A8A] leading-none block">MultiCare</span>
-              <span className="text-[10px] font-medium text-slate-400 leading-none tracking-widest uppercase">Clinics</span>
+              <span className="text-xl font-bold leading-none block" style={{ color: primary }}>
+                {settings.hospital_name || 'MultiCare'}
+              </span>
+              <span className="text-[10px] font-medium text-slate-400 leading-none tracking-widest uppercase">
+                {settings.tagline ? settings.tagline.slice(0, 28) : 'Clinics'}
+              </span>
             </div>
           </Link>
 
@@ -69,11 +90,10 @@ export default function Navbar() {
                   end={to === '/'}
                   className={({ isActive }) =>
                     `px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                      isActive
-                        ? 'bg-[#1E3A8A] text-white shadow-sm'
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-[#1E3A8A]'
+                      isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
                     }`
                   }
+                  style={({ isActive }) => isActive ? { backgroundColor: primary } : {}}
                 >
                   {label}
                 </NavLink>
@@ -85,12 +105,11 @@ export default function Navbar() {
           <div className="flex items-center gap-3">
             <Link
               to="/book"
-              className="hidden md:flex items-center gap-2 btn-primary text-sm py-2.5 px-5"
+              className="hidden md:flex items-center gap-2 text-white text-sm py-2.5 px-5 rounded-xl font-semibold shadow-sm hover:opacity-90 transition-opacity"
+              style={{ backgroundColor: primary }}
             >
-              <Calendar size={15} />
-              Book Now
+              <Calendar size={15} /> Book Now
             </Link>
-
             <button
               onClick={() => setMenuOpen(o => !o)}
               className="md:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition"
@@ -103,25 +122,23 @@ export default function Navbar() {
 
         {/* Mobile drawer */}
         {menuOpen && (
-          <div className="md:hidden border-t border-slate-100 py-4 space-y-1 animate-slide-up">
+          <div className="md:hidden border-t border-slate-100 py-4 space-y-1">
             {NAV_LINKS.map(({ to, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === '/'}
+              <NavLink key={to} to={to} end={to === '/'}
                 className={({ isActive }) =>
                   `block px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                    isActive
-                      ? 'bg-[#1E3A8A] text-white'
-                      : 'text-slate-700 hover:bg-slate-100'
+                    isActive ? 'text-white' : 'text-slate-700 hover:bg-slate-100'
                   }`
                 }
+                style={({ isActive }) => isActive ? { backgroundColor: primary } : {}}
               >
                 {label}
               </NavLink>
             ))}
             <div className="pt-2 px-1">
-              <Link to="/book" className="btn-primary flex items-center justify-center gap-2 text-sm w-full">
+              <Link to="/book"
+                className="flex items-center justify-center gap-2 text-white text-sm w-full py-2.5 rounded-xl font-semibold"
+                style={{ backgroundColor: primary }}>
                 <Calendar size={15} /> Book Appointment
               </Link>
             </div>
